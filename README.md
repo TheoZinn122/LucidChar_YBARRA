@@ -1,3 +1,4 @@
+[![DevOps Production Pipeline](https://github.com/TheoZinn122/LucidChar_YBARRA/actions/workflows/devops-pipeline.yml/badge.svg)](https://github.com/TheoZinn122/LucidChar_YBARRA/actions/workflows/devops-pipeline.yml)
 # Fluxo DevOps End-to-End
 
 Este repositório contém a implementação prática da esteira de CI/CD baseada no fluxo de arquitetura projetado no Lucidchart.
