@@ -1,0 +1,160 @@
+name: DevOps Production Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: app-backend
+  EKS_CLUSTER_NAME: k8s-prod-cluster
+
+jobs:
+  # ==========================================
+  # FASE 1 & 2: CI, Testes Unitários e SAST
+  # ==========================================
+  test-and-security:
+    name: Build, Test & Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do Código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup do Ambiente (Node.js / Python / Go)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Instalação de Dependências
+        run: npm ci
+
+      - name: Execução de Testes Unitários & Cobertura
+        run: npm test -- --coverage
+
+      - name: Análise SAST & Quality Gate (SonarQube)
+        uses: SonarSource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: Notificar Falha no Slack
+        if: failure()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {"text": "🚨 *Falha na Pipeline CI:* Testes ou SonarQube falharam no branch `${{ github.ref_name }}`."}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # ==========================================
+  # FASE 2: Build & Push da Imagem Imutável
+  # ==========================================
+  build-and-push:
+    name: Build & Push Container Image
+    needs: test-and-security
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_tag: ${{ steps.set-tag.outputs.tag }}
+
+    steps:
+      - name: Checkout do Código
+        uses: actions/checkout@v4
+
+      - name: Configuração de Credenciais AWS (OIDC / IAM)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login no Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Definir Tag da Imagem (Commit SHA)
+        id: set-tag
+        run: echo "tag=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build, Tag e Push da Imagem Docker
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $REGISTRY/$ECR_REPOSITORY:latest
+          docker push $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $REGISTRY/$ECR_REPOSITORY:latest
+
+  # ==========================================
+  # FASE 3: Deploy Contínuo em Staging
+  # ==========================================
+  deploy-staging:
+    name: Deploy em Homologação (Staging)
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Checkout dos Manifestos K8s / Helm
+        uses: actions/checkout@v4
+
+      - name: Conectar ao Cluster EKS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Atualizar Kubeconfig
+        run: aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name staging-cluster
+
+      - name: Deploy via Kustomize / Kubectl
+        env:
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          kubectl set image deployment/app-backend app-backend=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG -n staging
+          kubectl rollout status deployment/app-backend -n staging --timeout=180s
+
+  # ==========================================
+  # FASE 4: Promoção para Produção (Rollout Seguro)
+  # ==========================================
+  deploy-production:
+    name: Deploy em Produção (Rolling Update)
+    needs: [build-and-push, deploy-staging]
+    runs-on: ubuntu-latest
+    environment: production  # Exige aprovação manual configurada no GitHub
+
+    steps:
+      - name: Conectar ao Cluster EKS de Produção
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Atualizar Kubeconfig de Produção
+        run: aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
+
+      - name: Executar Rolling Update no Kubernetes
+        env:
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          kubectl set image deployment/app-backend app-backend=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG -n production
+          kubectl rollout status deployment/app-backend -n production --timeout=300s
+
+      - name: Notificar Sucesso no Slack
+        if: success()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {"text": "🚀 *Deploy em Produção realizado com sucesso!* Tag: `${{ needs.build-and-push.outputs.image_tag }}`."}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
