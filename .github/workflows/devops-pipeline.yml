@@ -7,9 +7,6 @@ on:
     branches: [ "main" ]
 
 jobs:
-  # ==========================================
-  # FASE 1: CI, Testes Unitários e SAST
-  # ==========================================
   test-and-security:
     name: Build, Test & Security Scan
     runs-on: ubuntu-latest
@@ -19,21 +16,18 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Instalação de Dependências
-        run: echo "📦 Instalando dependências do projeto..."
+        run: echo "📦 Instalando dependencias do projeto..."
 
       - name: Execução de Testes Unitários
         run: |
           echo "🧪 Executando bateria de testes automatizados..."
-          echo "✅ Testes unitários passaram com 100% de sucesso!"
+          echo "✅ Testes unitarios passaram com 100% de sucesso!"
 
-      - name: Análise SAST & Quality Gate (SonarQube)
+      - name: Análise SAST (SonarQube)
         run: |
-          echo "🔍 Escaneando vulnerabilidades e qualidade de código..."
-          echo "✅ Quality Gate Aprovado (0 Vulnerabilidades críticas encontradas)."
+          echo "🔍 Escaneando vulnerabilidades de codigo..."
+          echo "✅ Quality Gate Aprovado (0 falhas encontradas)."
 
-  # ==========================================
-  # FASE 2: Build da Imagem Imutável
-  # ==========================================
   build-and-push:
     name: Build & Push Container Image
     needs: test-and-security
@@ -45,16 +39,12 @@ jobs:
 
       - name: Build da Imagem Docker
         run: |
-          echo "🐳 Construindo imagem Docker com tag: ${{ github.sha }}..."
+          echo "🐳 Construindo imagem Docker..."
           docker version
 
       - name: Push para Container Registry
-        run: |
-          echo "🚀 Imagem publicada com sucesso no Container Registry (ECR/DockerHub)!"
+        run: echo "🚀 Imagem publicada com sucesso no Registry!"
 
-  # ==========================================
-  # FASE 3: Deploy Contínuo em Staging
-  # ==========================================
   deploy-staging:
     name: Deploy em Homologação (Staging)
     needs: build-and-push
@@ -63,25 +53,22 @@ jobs:
     steps:
       - name: Deploy no Cluster Staging
         run: |
-          echo "☸️ Atualizando pods no namespace 'staging' via Kubernetes / Helm..."
+          echo "☸️ Atualizando pods no namespace staging..."
           echo "✅ Deploy em Staging finalizado com sucesso."
 
       - name: Testes Integrados e QA
         run: |
-          echo "🔬 Executando smoke tests e testes integrados em Staging..."
-          echo "✅ Ambiente de homologação validado e pronto para produção."
+          echo "🔬 Executando testes integrados em Staging..."
+          echo "✅ Homologacao aprovada para producao."
 
-  # ==========================================
-  # FASE 4: Promoção para Produção
-  # ==========================================
   deploy-production:
     name: Deploy em Produção (Rolling Update)
     needs: [build-and-push, deploy-staging]
     runs-on: ubuntu-latest
 
     steps:
-      - name: Executar Rolling Update no Kubernetes
+      - name: Executar Rolling Update
         run: |
-          echo "🚀 Iniciando Rolling Update em Produção..."
-          echo "☸️ Cluster de Produção atualizado sem downtime!"
-          echo "📊 Notificando sistema de Observabilidade (Datadog/Prometheus)..."
+          echo "🚀 Iniciando deploy em Producao..."
+          echo "☸️ Cluster atualizado com zero downtime!"
+          echo "📊 Metricas e logs conectados ao monitoramento."
